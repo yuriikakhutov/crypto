@@ -1,39 +1,71 @@
 # Crypto puzzle helper
 
-This repository captures the reasoning process for a small cryptography-themed
-puzzle.  The `data.txt` file stores the raw clues (GitHub links, the dashed
-layout hint, the cipher key hint, and the proclamation pulled from an image).
+This repository documents the steps needed to solve the small crypto puzzle that
+originally accompanied the Leon Battista Alberti image. All of the raw clues are
+stored in `data.txt`:
 
-`solve.py` reads those clues and reproduces the deduction steps:
+* the list of GitHub repository URLs whose initials spell out a Vigenère
+  ciphertext,
+* the dashed pattern that indicates how to segment the proclamation once it has
+  been decrypted, and
+* the plain hint `decode Great ;)` plus the hidden image clue that exposes the
+  word `wind`.
 
-1. Gather the repository slugs from the provided links.
-2. Use the repeated dashed layout to extract the word-length pattern hint.
-3. Detect the Vigenère keyword from the "decode" clue (currently `great`) and
-   surface it in the CLI output so the message always reflects the parsed key.
-4. Decrypt the string formed by the slug initials, display the alpha/beta/gamma
-   triplets, and score all 3-letter keys hinted by "alpha, beta, gamma" to find
-   stronger plaintexts.  The script prints the highest-ranked candidates rather
-   than hard-coding a single example so the output always matches the search
-   results for the current scoring heuristic.
-5. Decrypt Leon Battista's proclamation, reshape the plaintext according to the
-   dash pattern hint, automatically segment the message into natural words using
-   frequency-based scoring, and surface the final question (with a trailing
-   question mark) for quick reference.
-6. Pull the Netlify configuration gist linked in the discussion, extract the
-   leading letters of each configuration key, and run a simple substitution
-   search to present the strongest candidate plaintext recovered from that
-   token stream.
+The solving path is short:
 
-The optional `wordfreq` package, if available, improves the 3-letter key search
-by providing richer English scoring.  Without it the solver falls back to a
-lighter frequency heuristic.
+1. **Alpha stage – hidden image text.** Combine the RGB channels from the image
+   referenced by the puzzle to uncover the word `wind`. That confirms you are on
+   the right track but it is only flavour for the next step.
+2. **Vigenère stage – proclamation decode.** Take the first letters of each
+   repository slug listed in `data.txt` to build the ciphertext
+   `ciqjbqdpapidccc`. Decrypting it with the provided key `great` yields the
+   phrase `hideandseek`. Apply the same key to Alberti's proclamation (the
+   quoted text in `data.txt`) to obtain the sentence `doureallythinkitsallnetli`
+   `fyapp`.
+3. **Final message → Netlify checkpoint.** Format the proclamation using the
+   dashed pattern from `data.txt` or the helper script below to read the final
+   question:
 
-The proclamation decodes to the plain-language question:
+   ```
+   do u really think its all netlify app?
+   ```
 
-> **do u really think its all netlify app?**
+   Removing the spaces (and the question mark) yields the domain name
+   `doureallythinkitsall.netlify.app`, which hosts the continuation of the
+   puzzle. The landing page confirms the earlier alpha/beta/gamma hints and
+   reveals three numbered clues (labelled with the Greek letters) together with
+   a visible prime `11`, a hidden `gamma` prime `47`, and an instruction to
+   “multiply all three and add .netlify.app.” The numeric attributes associated
+   with the images provide the remaining factors:
 
-Run the helper with:
+   * Alpha image → `data-alpha="177"` (prime factors 3 × 59).
+   * Beta image → `data-beta="198"` (prime factors 2 × 3² × 11) plus the visible
+     `11` text block.
+   * Gamma metadata → `data-gamma="47"` (already prime).
+
+   Selecting the appropriate prime from each stage, multiplying them, and
+   appending `.netlify.app` yields the next Netlify subdomain. The page also
+   repeats the “wind guild” pointer, nudging players toward the Telegram handle
+   shown in the coordinates block, and hides extra flavour text via Base64
+   (`The cycle begins anew`, `I think something is wrong`).
+
+The `solve.py` helper automates the bookkeeping:
+
+* parses `data.txt` to recover the URL list, dash pattern, key, hidden hint, and
+  proclamation ciphertext,
+* demonstrates the Vigenère decoding using the supplied key, and
+* prints the proclamation segmented by the dash pattern so the final question is
+  easy to read,
+* derives the Netlify hostname hidden in that question, and
+* optionally downloads the follow-up Netlify page and extracts the new alpha,
+  beta, and gamma hints (including their prime factors).
+
+Run it with:
 
 ```bash
 python solve.py
 ```
+
+The optional `wordfreq` dependency can still be installed to improve the scoring
+functions used by the substitution-solver experiments, but it is not required to
+reach the finale described above.
