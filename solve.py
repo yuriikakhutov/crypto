@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import itertools
 import math
 import random
@@ -91,11 +92,14 @@ FALLBACK_WORD_SCORES = {
 }
 
 
-def load_puzzle(path: Path) -> tuple[List[str], List[int], str, str]:
+def load_puzzle(
+    path: Path,
+) -> tuple[List[str], List[int], str, str, str | None]:
     urls: List[str] = []
     dash_pattern: List[int] = []
     key = ""
     proclamation_cipher = ""
+    hidden_hint: str | None = None
 
     dash_line_re = re.compile(r"^-{3}(?:\s+-{3,}){4}$")
     decode_re = re.compile(r"^decode\s+([A-Za-z]+)")
@@ -113,8 +117,8 @@ def load_puzzle(path: Path) -> tuple[List[str], List[int], str, str]:
             if match:
                 key = match.group(1).lower()
                 continue
-            if line.lower() == "wind" and not key:
-                key = line.lower()
+            if line.lower() == "wind":
+                hidden_hint = line.lower()
                 continue
             if dash_line_re.match(line):
                 dash_pattern = [len(part) for part in line.split()]
@@ -131,7 +135,7 @@ def load_puzzle(path: Path) -> tuple[List[str], List[int], str, str]:
         raise ValueError("Cipher key missing from data file")
     if not proclamation_cipher:
         raise ValueError("Proclamation cipher text missing from data file")
-    return urls, dash_pattern, key, proclamation_cipher
+    return urls, dash_pattern, key, proclamation_cipher, hidden_hint
 
 
 def chunked(iterable: Iterable[str], size: int) -> Iterable[List[str]]:
@@ -396,13 +400,109 @@ def segment_text(text: str) -> List[str]:
     return words
 
 
+def is_prime(number: int) -> bool:
+    if number < 2:
+        return False
+    if number in (2, 3):
+        return True
+    if number % 2 == 0:
+        return False
+    limit = int(math.isqrt(number))
+    candidate = 3
+    while candidate <= limit:
+        if number % candidate == 0:
+            return False
+        candidate += 2
+    return True
+
+
+def prime_factors(number: int) -> List[int]:
+    if number <= 1:
+        return []
+    factors: List[int] = []
+    remainder = number
+    divisor = 2
+    while divisor * divisor <= remainder:
+        while remainder % divisor == 0:
+            factors.append(divisor)
+            remainder //= divisor
+        divisor = 3 if divisor == 2 else divisor + 2
+    if remainder > 1:
+        factors.append(remainder)
+    return factors
+
+
+def derive_netlify_domain(question: str) -> str:
+    tokens = re.findall(r"[a-z0-9]+", question.lower())
+    if len(tokens) >= 2 and tokens[-2:] == ["netlify", "app"]:
+        host = "".join(tokens[:-2])
+        return f"{host}.netlify.app"
+    sanitized = "".join(tokens)
+    return f"{sanitized}.netlify.app"
+
+
+def fetch_page(url: str) -> str:
+    with urlopen(url) as handle:
+        raw = handle.read()
+    return raw.decode("utf-8", errors="replace")
+
+
+def parse_netlify_page(html: str) -> None:
+    attribute_values = {
+        label: int(value)
+        for label, value in re.findall(r"data-(alpha|beta|gamma)=\"(\d+)\"", html)
+    }
+    if attribute_values:
+        print("Netlify alpha/beta/gamma attributes:")
+        for label in ["alpha", "beta", "gamma"]:
+            if label in attribute_values:
+                value = attribute_values[label]
+                factors = prime_factors(value)
+                print(f"  {label}: {value} → prime factors {factors if factors else '[]'}")
+
+    visible_numbers = [
+        int(match)
+        for match in re.findall(r">\s*(\d+)\s*<", html)
+        if match.isdigit()
+    ]
+    visible_primes = [number for number in visible_numbers if is_prime(number)]
+    if visible_primes:
+        print("Visible primes on page:", visible_primes)
+
+    cipher_hints = set(re.findall(r"data-cipher=\"([^\"]+)\"", html))
+    for encoded in sorted(cipher_hints):
+        try:
+            decoded = base64.b64decode(encoded).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            continue
+        print(f"Decoded data-cipher hint: {decoded}")
+
+    comment_hints = re.findall(r"<!--\s*([^<>]+?)\s*-->", html)
+    for comment in comment_hints:
+        stripped = comment.strip()
+        try:
+            decoded = base64.b64decode(stripped).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            print("HTML comment:", stripped)
+        else:
+            print("Decoded HTML comment:", decoded)
+
+    tele_handles = re.findall(r"[A-Za-z0-9_.-]+\.t\.me", html)
+    if tele_handles:
+        print("Telegram pointers:", sorted(set(tele_handles)))
+
+
 def main() -> None:
     data_path = Path("data.txt")
-    urls, dash_pattern, key, proclamation_cipher = load_puzzle(data_path)
+    urls, dash_pattern, key, proclamation_cipher, hidden_hint = load_puzzle(
+        data_path
+    )
 
     print("Loaded", len(urls), "urls")
     print("Dash pattern (word lengths hint):", dash_pattern)
     print("Cipher key:", key)
+    if hidden_hint:
+        print("Hidden image keyword (Alpha stage):", hidden_hint)
 
     cipher_text = derive_cipher_text(urls)
     print("Cipher text from repository slugs:", cipher_text)
@@ -411,25 +511,20 @@ def main() -> None:
     print(f"Decoded text from slugs (using key '{key}'):", plaintext)
 
     triplets = into_triplets(plaintext)
-    print("\nAlpha/Beta/Gamma triplets:")
+    print("\nTriplet view of the slug plaintext (for curiosity):")
     for index, group in enumerate(triplets, start=1):
         print(f"  Triplet {index}:", group)
 
-    print("Column words from the triplet table:")
+    print("Column words derived from the triplets:")
     for label, word in zip(["alpha", "beta", "gamma"], column_words(triplets)):
         print(f"  {label}: {word}")
 
-    print("\nBest scoring 3-letter keys suggested by the alpha/beta/gamma hint:")
-    for candidate_key, candidate_plain, candidate_score in search_vigenere_keys(
-        cipher_text, key_length=3
-    ):
-        print(
-            f"  key='{candidate_key}' score={candidate_score:.3f} -> {candidate_plain}"
-        )
-
     proclamation_plain = vigenere_decrypt(proclamation_cipher, key)
-    print("\nProclamation cipher:", proclamation_cipher)
-    print("Proclamation plaintext:", proclamation_plain)
+    print("\nProclamation cipher (Alberti stage):", proclamation_cipher)
+    print(
+        "Decryption with the overt key '{key}' (checkpoint only):".format(key=key),
+        proclamation_plain,
+    )
 
     patterned = apply_pattern(proclamation_plain, dash_pattern)
     print("Patterned proclamation:", " ".join(patterned))
@@ -441,10 +536,18 @@ def main() -> None:
     else:
         segmented_text = " ".join(patterned)
 
-    final_question = segmented_text
-    if not final_question.endswith("?"):
-        final_question = f"{final_question}?"
-    print("Final proclamation question:", final_question)
+    print("Final proclamation (formatted):", segmented_text)
+
+    netlify_domain = derive_netlify_domain(segmented_text)
+    netlify_url = f"https://{netlify_domain}/"
+    print("Derived Netlify follow-up domain:", netlify_url)
+
+    try:
+        html = fetch_page(netlify_url)
+    except URLError as exc:
+        print("  Unable to download follow-up page:", exc)
+    else:
+        parse_netlify_page(html)
 
     print("\nDecoding the Netlify configuration gist tokens:")
     gist_url = (
@@ -458,7 +561,7 @@ def main() -> None:
         cipher_stream = " ".join(tokens)
         print("  Token cipher:", cipher_stream)
         solver = SubstitutionSolver(cipher_stream)
-        result = solver.solve()
+        result = solver.solve(restarts=12, iterations=1500)
         print("  Best substitution candidate:", result.plaintext)
         print("  Candidate key:", result.key)
         print(f"  Candidate score: {result.score:.3f}")
